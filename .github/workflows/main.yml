@@ -1,15 +1,15 @@
-name: Install BladePipe (Binary)
+name: BladePipe Install & Tail Logs
 
 on:
   workflow_dispatch: {}
 
 jobs:
-  install:
+  install-and-tail:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 360  # 让它能长时间 tail（GitHub Actions 也有平台上限）
 
     steps:
-      - name: Runner info
+      - name: Show runner info
         run: |
           uname -a
           id
@@ -20,7 +20,7 @@ jobs:
           distribution: temurin
           java-version: '8'
 
-      - name: Pre-create bladepipe user & sudoers
+      - name: Ensure bladepipe user exists (optional but safer)
         run: |
           set -eux
           if ! id bladepipe &>/dev/null; then
@@ -31,151 +31,51 @@ jobs:
           fi
           ls -ld /home/bladepipe
 
-      - name: Write BladePipe installer (your script)
-        shell: bash
-        run: |
-          cat > /tmp/install_bladepipe.sh <<'BASH'
-          #!/bin/bash
-          set -euo pipefail
-          USERNAME="bladepipe"
-          USERPATH="/home/$USERNAME"
-
-          function tar_tgz() {
-              FILENAME=$1
-              total_size=$(ls -l $FILENAME | awk '{print $5}')
-              block_size=$(expr $total_size / 51200)
-              block_size=$(expr $block_size + 2500)
-              echo ""
-              echo "Begin to start unzip $FILENAME file."
-              tar --blocking-factor=$block_size --checkpoint=1 --checkpoint-action='ttyout=Unzip file progress: %u%    \r' -zxf $FILENAME
-              echo "Finish unzip $FILENAME file."
-          }
-
-          function init() {
-              if ! id "$USERNAME" &>/dev/null; then
-                  echo "[ERROR] User '$USERNAME' does not exist."
-                  echo "sudo useradd -d $USERPATH -m $USERNAME"
-                  exit 2
-              fi
-              if ! command -v java &>/dev/null; then
-                  echo "[ERROR] Java is not installed."
-                  exit 3
-              fi
-              cd $USERPATH || exit 3
-              [ -d $USERPATH/tar_gz/ ] || mkdir $USERPATH/tar_gz/
-              chown -R $USERNAME:$USERNAME $USERPATH/
-              worker_app="SidecarApplication"
-              if jps | grep -q "$worker_app"; then
-                  echo "[WARN] Worker exists, abort."
-                  exit 4
-              fi
-          }
-
-          function download() {
-              URL=$1
-              cd $USERPATH/tar_gz/
-              if [ -f bladepipe.tgz ]; then
-                  echo -e "[INFO] bladepipe.tgz exists, keep it."
-              else
-                  echo "Begin to download installation package."
-                  echo ""
-                  curl -O -L -f $URL
-              fi
-              echo ""
-              [ -f bladepipe.tgz ] || { echo "[ERROR] bladepipe.tgz not found."; exit 5; }
-          }
-
-          function install() {
-              echo "Paste 4 lines from https://cloud.bladepipe.com:"
-              echo "+------------------ PASTE CONFIG HERE ------------------+"
-
-              read_non_empty_input_block() {
-                  local input result=""; local count=0
-                  while true; do
-                      IFS= read -r input
-                      input=$(echo "$input" | xargs)
-                      if [[ -n "$input" ]]; then
-                          result="${result}${input}"$'\n'
-                          count=$((count + 1))
-                          if [[ $count -eq 4 ]]; then break; fi
-                      fi
-                  done
-                  echo "$result"
-              }
-
-              config_block=$(read_non_empty_input_block)
-              while IFS= read -r line; do
-                  if [[ "$line" == *bladepipe.auth.ak=* ]]; then ak_input="${line#*=}"; fi
-                  if [[ "$line" == *bladepipe.auth.sk=* ]]; then sk_input="${line#*=}"; fi
-                  if [[ "$line" == *bladepipe.worker.wsn=* ]]; then wsn_input="${line#*=}"; fi
-                  if [[ "$line" == *bladepipe.console.domain=* ]]; then domain_input="${line#*=}"; fi
-              done <<< "$config_block"
-
-              echo "+---------------------- CONFIG END ---------------------+"
-
-              if [ -n "${ak_input:-}" ] && [ -n "${sk_input:-}" ] && [ -n "${wsn_input:-}" ] && [ -n "${domain_input:-}" ]; then
-                  cp $USERPATH/tar_gz/bladepipe.tgz $USERPATH/
-                  cd $USERPATH
-                  tar_tgz bladepipe.tgz
-                  tar_tgz bladepipe-core.tar.gz
-                  tar_tgz bladepipe-ds.tar.gz
-                  tar_tgz bladepipe-worker.tar.gz
-
-                  echo "bladepipe.auth.ak=$ak_input" >  $USERPATH/bladepipe/global_conf/conf.properties
-                  echo "bladepipe.auth.sk=$sk_input" >> $USERPATH/bladepipe/global_conf/conf.properties
-                  echo "bladepipe.worker.wsn=$wsn_input" >> $USERPATH/bladepipe/global_conf/conf.properties
-                  echo "bladepipe.console.domain=$domain_input" >> $USERPATH/bladepipe/global_conf/conf.properties
-
-                  chown -R $USERNAME:$USERNAME $USERPATH/
-
-                  if [ "$(whoami)" == "$USERNAME" ]; then
-                      bash /home/bladepipe/bladepipe/worker/bin/startWorker.sh
-                  else
-                      su $USERNAME -c "bash /home/bladepipe/bladepipe/worker/bin/startWorker.sh"
-                  fi
-
-                  rm -f bladepipe.tgz bladepipe-core.tar.gz bladepipe-ds.tar.gz bladepipe-worker.tar.gz
-                  echo "[SUCCESS] BladePipe Worker installed."
-              else
-                  echo "[ERROR] Empty config."
-                  exit 6
-              fi
-          }
-
-          function __main() {
-              temp_file=$(mktemp)
-              curl -s -L -f https://download.bladepipe.com/version > "$temp_file" &
-              curl_pid=$!
-              spin='-\|/'; i=0
-              while kill -0 $curl_pid 2>/dev/null; do
-                  i=$(( (i+1) % 4 )); printf "\rFetching the latest version... ${spin:$i:1}"; sleep 0.1
-              done
-              wait $curl_pid; curl_exit_status=$?; printf "\r\033[K"
-              worker_version=$(cat "$temp_file"); rm -f "$temp_file"
-              [ $curl_exit_status -eq 0 ] || { echo "[ERROR] fetch version failed"; exit 1; }
-              echo "[INFO] Worker version: ${worker_version}"
-              echo "Docs: https://doc.bladepipe.com/productOP/binary/install_worker_binary/"
-              init
-              download "https://github.com/bladepipe/worker/releases/download/v$worker_version/bladepipe.tgz"
-              install
-          }
-          __main
-          BASH
-          chmod +x /tmp/install_bladepipe.sh
-
-      - name: Run BladePipe installer (non-interactive, with your config)
+      - name: Run official installer (non-interactive)
         shell: bash
         run: |
           set -euo pipefail
-          sudo bash /tmp/install_bladepipe.sh <<'EOF'
+          # 直接执行你的一行脚本，并将 4 行配置通过 stdin 传入
+          sudo /bin/bash -c "$(curl -fsSL https://download.bladepipe.com/binary/install_run.sh)" <<'EOF'
           bladepipe.auth.ak=aky1cj8w4s5qtqcxy5fu627v026r9un82b738y9nd79so793750dv1a3t1430g1
           bladepipe.auth.sk=skp93j846395g9mru5631pqvm1261ln80uxza93d0r445e08k73fq3q4x593102
           bladepipe.worker.wsn=wsn792570f4s1pl9tsm962hhv7azernf238jky0iezgefggmk637no2qkvnyp2d7
           bladepipe.console.domain=west-us-1.bladepipe.com
           EOF
 
-      - name: Show processes (optional)
-        if: always()
+      - name: Wait for log file to appear
+        shell: bash
         run: |
-          jps || true
-          ps -ef | grep -i bladepipe | grep -v grep || true
+          set -euo pipefail
+          LOG=~/logs/bladepipe/worker/sidecar.log
+          # 有些脚本会用 bladepipe 用户的 home，兜底再检查 /home/bladepipe 下的日志
+          ALT=/home/bladepipe/logs/bladepipe/worker/sidecar.log
+
+          echo "[INFO] Waiting for log file to be created ..."
+          for i in $(seq 1 60); do
+            if [ -f "$LOG" ]; then
+              echo "[INFO] Found $LOG"; export BP_LOG="$LOG"; break
+            elif [ -f "$ALT" ]; then
+              echo "[INFO] Found $ALT"; export BP_LOG="$ALT"; break
+            else
+              sleep 5
+            fi
+          done
+
+          if [ -z "${BP_LOG:-}" ]; then
+            echo "[WARN] Log file not found yet. Current tree:"
+            sudo ls -la ~/logs || true
+            sudo ls -la /home/bladepipe/logs || true
+            # 仍然设定一个兜底路径，tail 时会等待文件出现
+            BP_LOG="$ALT"
+          fi
+          echo "BP_LOG=$BP_LOG" >> $GITHUB_ENV
+
+      - name: Tail BladePipe worker logs (keep job alive)
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "[INFO] Tailing logs from: $BP_LOG"
+          # -n 200 先输出最近 200 行；-F 会在文件被轮转时继续跟踪
+          # 这个步骤会持续运行直到超时或手动取消
+          sudo tail -n 200 -F "$BP_LOG"
