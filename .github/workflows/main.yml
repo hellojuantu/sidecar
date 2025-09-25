@@ -6,7 +6,7 @@ on:
 jobs:
   install-and-tail:
     runs-on: ubuntu-latest
-    timeout-minutes: 360  # 让它能长时间 tail（GitHub Actions 也有平台上限）
+    timeout-minutes: 360
 
     steps:
       - name: Show runner info
@@ -48,7 +48,6 @@ jobs:
         run: |
           set -euo pipefail
           LOG=~/logs/bladepipe/worker/sidecar.log
-          # 有些脚本会用 bladepipe 用户的 home，兜底再检查 /home/bladepipe 下的日志
           ALT=/home/bladepipe/logs/bladepipe/worker/sidecar.log
 
           echo "[INFO] Waiting for log file to be created ..."
@@ -66,7 +65,6 @@ jobs:
             echo "[WARN] Log file not found yet. Current tree:"
             sudo ls -la ~/logs || true
             sudo ls -la /home/bladepipe/logs || true
-            # 仍然设定一个兜底路径，tail 时会等待文件出现
             BP_LOG="$ALT"
           fi
           echo "BP_LOG=$BP_LOG" >> $GITHUB_ENV
@@ -76,6 +74,4 @@ jobs:
         run: |
           set -euo pipefail
           echo "[INFO] Tailing logs from: $BP_LOG"
-          # -n 200 先输出最近 200 行；-F 会在文件被轮转时继续跟踪
-          # 这个步骤会持续运行直到超时或手动取消
           sudo tail -n 200 -F "$BP_LOG"
