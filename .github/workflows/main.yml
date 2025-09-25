@@ -1,7 +1,21 @@
 name: BladePipe Install & Tail Logs
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      ak:
+        description: "BladePipe Access Key"
+        required: true
+      sk:
+        description: "BladePipe Secret Key"
+        required: true
+      wsn:
+        description: "BladePipe Worker WSN"
+        required: true
+      console_domain:
+        description: "BladePipe Console Domain"
+        required: false
+        default: "west-us-1.bladepipe.com"
 
 jobs:
   install-and-tail:
@@ -35,12 +49,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # 直接执行你的一行脚本，并将 4 行配置通过 stdin 传入
           sudo /bin/bash -c "$(curl -fsSL https://download.bladepipe.com/binary/install_run.sh)" <<'EOF'
-          bladepipe.auth.ak=aky1cj8w4s5qtqcxy5fu627v026r9un82b738y9nd79so793750dv1a3t1430g1
-          bladepipe.auth.sk=skp93j846395g9mru5631pqvm1261ln80uxza93d0r445e08k73fq3q4x593102
-          bladepipe.worker.wsn=wsn792570f4s1pl9tsm962hhv7azernf238jky0iezgefggmk637no2qkvnyp2d7
-          bladepipe.console.domain=west-us-1.bladepipe.com
+          bladepipe.auth.ak=${{ inputs.ak }}
+          bladepipe.auth.sk=${{ inputs.sk }}
+          bladepipe.worker.wsn=${{ inputs.wsn }}
+          bladepipe.console.domain=${{ inputs.console_domain }}
           EOF
 
       - name: Wait for log file to appear
